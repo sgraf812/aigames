@@ -22,15 +22,35 @@ data Message = SuperRegions [(SRID, Reward)]
              | AttackTransferRequest Millis 
                 deriving (Show, Eq)
 
-data Move = StartingRegions [RID] -- currently exactly 6 RIDs allowed
+data Move = StartingRegions [RID] -- currently exactly 6 RIDs allowed. Maybe this can be forced through the type system somehow without resorting to tuples
           | PlaceArmies Player [(RID, Int)] -- last val: #armies
           | AttackTransfer Player [(RID, RID, Int)] -- src Reg, tgt Reg, #armies
           | NoMoves
             deriving (Show, Eq)
 
-step :: a -> Message -> (a, [Move])
-step w m = (w, [StartingRegions . map RID $ [1,2,3,5,4,6], PlaceArmies (Player "me") (RID 42) 1, AttackTransfer (Player "opp") (RID 23) (RID 21) 3, NoMoves])
+data World = World { regions :: [(RID, Player, Int)]
+                   }
 
+emptyWorld :: World
+emptyWorld = World []
+
+data Brain mem = Brain { emptyMemory :: mem
+                       , logic :: mem -> World -> mem
+                       , chosenMove :: mem -> Move
+                       }
+
+stupidBrain :: Brain ()
+stupidBrain = Brain () logic chosenMove
+              where logic m w = m
+                    chosenMove m = AttackTransfer (Player "opp") [((RID 23), (RID 21), 3)]
+
+updateWorld :: World -> Message -> World
+updateWorld w msg = w
+
+step :: (mem -> World -> mem) -> (mem, World) -> Message -> (mem, World) 
+step logic (m,w) msg = let w' = updateWorld w msg
+                           m' = logic m w'
+                       in (m',w')
 ----------
 --Output--
 ----------
@@ -84,17 +104,17 @@ opponentMoves :: [String] -> Message
 opponentMoves ws' = OpponentMoves $ parseMoves ws'
                     where parseMoves [] = [] 
                           parseMoves ws = case ws !! 1 of
-                            "place_armies" -> PlaceArmies (Player . head $ ws) (RID . read $ ws !! 2) (read $ ws !! 3) : parseMoves (drop 4 ws)
-                            "attack/transfer" -> AttackTransfer (Player . head $ ws) (RID . read $ ws !! 2) (RID . read $ ws !! 3) (read $ ws !! 4) : parseMoves (drop 5 ws)                 
+                            "place_armies" -> PlaceArmies (Player . head $ ws) [(RID . read $ ws !! 2, read $ ws !! 3)] : parseMoves (drop 4 ws)
+                            "attack/transfer" -> AttackTransfer (Player . head $ ws) [(RID . read $ ws !! 2, RID . read $ ws !! 3, read $ ws !! 4)] : parseMoves (drop 5 ws)                 
 
 go :: [String] -> Message
 go ws = case ws of
             ("place_armies":ws') -> PlaceArmiesRequest . Millis . read . head $ ws'
             ("attack/transfer":ws') -> AttackTransferRequest . Millis . read . head $ ws' 
 
-handleInput :: (World, a) -> [String] -> [String]
-handleInput w = concatMap (formatOutput . scanl w (updateStrategy . updateWorld) . parseInput)
+handleInput :: Brain mem -> [String] -> [String]
+handleInput b = map (formatOutput . chosenMove b . fst) . tail . scanl (step $ logic b) (emptyMemory b, emptyWorld) . map parseInput
 
 main :: IO ()
-main = interact $ unlines . handleInput () . lines
+main = interact $ unlines . handleInput stupidBrain . lines
 
