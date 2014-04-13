@@ -1,3 +1,4 @@
+import Data.List (intercalate)
 import Data.List.Split (splitOn)
 --------
 --Data--
@@ -22,16 +23,24 @@ data Message = SuperRegions [(SRID, Reward)]
                 deriving (Show, Eq)
 
 data Move = StartingRegions [RID] -- currently exactly 6 RIDs allowed
-          | PlaceArmies Player RID Int -- last val: #armies
-          | AttackTransfer Player RID RID Int -- src Reg, tgt Reg, #armies
+          | PlaceArmies Player [(RID, Int)] -- last val: #armies
+          | AttackTransfer Player [(RID, RID, Int)] -- src Reg, tgt Reg, #armies
           | NoMoves
             deriving (Show, Eq)
 
-step :: Message -> [Move]
-step = undefined
+step :: a -> Message -> (a, [Move])
+step w m = (w, [StartingRegions . map RID $ [1,2,3,5,4,6], PlaceArmies (Player "me") (RID 42) 1, AttackTransfer (Player "opp") (RID 23) (RID 21) 3, NoMoves])
 
-formatOutput :: [Move] -> [String]
-formatOutput = undefined
+----------
+--Output--
+----------
+formatOutput :: Move -> String
+formatOutput m = case m of
+                    StartingRegions rids -> unwords . map (\(RID i) -> show i) $ rids 
+                    PlaceArmies (Player p) armies -> intercalate ", " . map (\(RID r, na) -> unwords [p, "place_armies", show r, show na]) $ armies
+                    AttackTransfer (Player p) mvmts -> intercalate ", " . map (\(RID src, RID tgt, na) -> unwords [p, "attack/transfer", show src, show tgt, show na]) $ mvmts
+                    NoMoves -> "No moves"
+               
 ---------
 --Input--
 ---------
@@ -83,10 +92,9 @@ go ws = case ws of
             ("place_armies":ws') -> PlaceArmiesRequest . Millis . read . head $ ws'
             ("attack/transfer":ws') -> AttackTransferRequest . Millis . read . head $ ws' 
 
-handleInput :: [String] -> [String]
-handleInput = concat . map formatOutput . map step . map parseInput
+handleInput :: (World, a) -> [String] -> [String]
+handleInput w = concatMap (formatOutput . scanl w (updateStrategy . updateWorld) . parseInput)
 
 main :: IO ()
---main = interact $ unlines . handleInput . lines
-main = interact $ unlines . map show . map parseInput . lines
+main = interact $ unlines . handleInput () . lines
 
