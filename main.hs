@@ -1,5 +1,9 @@
+{-# LANGUAGE Rank2Types #-}
 import Data.List (intercalate)
 import Data.List.Split (splitOn)
+import Data.Maybe
+import qualified Data.Graph.Inductive as G
+import qualified Data.Map as M
 --------
 --Data--
 --------
@@ -10,7 +14,7 @@ newtype Millis = Millis Int deriving (Show, Eq)
 newtype Player = Player String deriving (Show, Eq)
 
 data Message = SuperRegions [(SRID, Reward)] 
-             | Regions [RID] 
+             | Regions [(RID, SRID)] 
              | Neighbors [(RID, [RID])]
              | UpdateMap [(RID, Player, Int)] -- last val: #armies 
              | YourBot Player
@@ -28,11 +32,16 @@ data Move = StartingRegions [RID] -- currently exactly 6 RIDs allowed. Maybe thi
           | NoMoves
             deriving (Show, Eq)
 
-data World = World { regions :: [(RID, Player, Int)]
+data Faction = Friendly Player | Neutral | Enemy Player
+
+type Region = (RID, SRID, Faction, Int) 
+
+data World = World { world :: G.Graph gr => gr RID ()
+                   , regions :: M.Map RID Region
                    }
 
 emptyWorld :: World
-emptyWorld = World []
+emptyWorld = World G.empty M.empty 
 
 data Brain mem = Brain { emptyMemory :: mem
                        , logic :: mem -> World -> mem
@@ -47,15 +56,22 @@ stupidBrain = Brain () logic chosenMove
 updateWorld :: World -> Message -> World
 updateWorld w msg = w
 
-step :: (mem -> World -> mem) -> (mem, World) -> Message -> (mem, World) 
-step logic (m,w) msg = let w' = updateWorld w msg
-                           m' = logic m w'
-                       in (m',w')
+
+step :: (mem -> World -> mem) -> (mem, World, Bool) -> Message -> (mem, World, Bool) 
+step logic (m,w,_) msg = let w' = updateWorld w msg
+                             o = requestsOutput msg
+                             m' = logic m w 
+                         in (m',w',o) where requestsOutput msg = case msg of
+                                                            PickStartingRegions _ _ -> True
+                                                            PlaceArmiesRequest _ -> True
+                                                            AttackTransferRequest _ -> True
+                                                            _ -> False
+                                                        
 ----------
 --Output--
 ----------
-formatOutput :: Move -> String
-formatOutput m = case m of
+formatMove :: Move -> String
+formatMove m = case m of
                     StartingRegions rids -> unwords . map (\(RID i) -> show i) $ rids 
                     PlaceArmies (Player p) armies -> intercalate ", " . map (\(RID r, na) -> unwords [p, "place_armies", show r, show na]) $ armies
                     AttackTransfer (Player p) mvmts -> intercalate ", " . map (\(RID src, RID tgt, na) -> unwords [p, "attack/transfer", show src, show tgt, show na]) $ mvmts
@@ -85,7 +101,7 @@ parseInput s = case words s of
 setupMap :: [String] -> Message
 setupMap ws = case ws of
                 ("super_regions":ws') -> SuperRegions . map (\(x, y) -> (SRID x, Reward y)) . pairwise . map read $ ws' 
-                ("regions":ws') -> Regions . map RID . map read $ ws' 
+                ("regions":ws') -> Regions . map (\(r, sr) -> (RID r, SRID sr)) . pairwise . map read $ ws' 
                 ("neighbors":ws') -> Neighbors . map (\(r, ns) -> (RID . read $ r, map RID . map read . splitOn "," $ ns)) . pairwise $ ws'
 
 updateMap :: [String] -> Message
@@ -113,7 +129,10 @@ go ws = case ws of
             ("attack/transfer":ws') -> AttackTransferRequest . Millis . read . head $ ws' 
 
 handleInput :: Brain mem -> [String] -> [String]
-handleInput b = map (formatOutput . chosenMove b . fst) . tail . scanl (step $ logic b) (emptyMemory b, emptyWorld) . map parseInput
+handleInput b = formatOutput . scanl (step $ logic b) (emptyMemory b, emptyWorld, False) . map parseInput
+                    where
+                        formatOutput = mapMaybe (\(m,_,o) -> if o then Just . formatMove . chosenMove b $ m else Nothing)
+                   
 
 main :: IO ()
 main = interact $ unlines . handleInput stupidBrain . lines
