@@ -3,12 +3,13 @@ import Data.List (intercalate)
 import Data.List.Split (splitOn)
 import Data.Maybe
 import qualified Data.Graph.Inductive as G
+import qualified Data.Graph.Inductive.Tree as TG
 import qualified Data.Map as M
 --------
 --Data--
 --------
-newtype SRID = SRID Int deriving (Show, Eq)
-newtype RID = RID Int deriving (Show, Eq)
+newtype SRID = SRID Int deriving (Show, Eq, Ord)
+newtype RID = RID Int deriving (Show, Eq, Ord)
 newtype Reward = Reward Int deriving (Show, Eq)
 newtype Millis = Millis Int deriving (Show, Eq)
 newtype Player = Player String deriving (Show, Eq)
@@ -33,34 +34,59 @@ data Move = StartingRegions [RID] -- currently exactly 6 RIDs allowed. Maybe thi
             deriving (Show, Eq)
 
 data Faction = Friendly Player | Neutral | Enemy Player
+                deriving (Show, Eq)
 
+type SuperRegion = (SRID, Reward, [RID])
 type Region = (RID, SRID, Faction, Int) 
 
-data World = World { world :: G.Graph gr => gr RID ()
+data World = World { world :: TG.Gr RID Int 
                    , regions :: M.Map RID Region
+                   , superRegions :: M.Map SRID SuperRegion
+                   , me :: Player
+                   , opponent :: Player
+                   , tbd :: [Message] -- list of messages yet to be processed, lifo.
                    }
 
 emptyWorld :: World
-emptyWorld = World G.empty M.empty 
+emptyWorld = World G.empty M.empty M.empty (Player "") (Player "") []
 
 data Brain mem = Brain { emptyMemory :: mem
                        , logic :: mem -> World -> mem
                        , chosenMove :: mem -> Move
                        }
 
-stupidBrain :: Brain ()
-stupidBrain = Brain () logic chosenMove
-              where logic m w = m
-                    chosenMove m = AttackTransfer (Player "opp") [((RID 23), (RID 21), 3)]
+stupidBrain :: Brain Int 
+stupidBrain = Brain 0 logic chosenMove
+              where logic m w = G.spLength (head . G.nodes . world $ w) (last . G.nodes . world $ w) (world w)
+                    chosenMove m = AttackTransfer (Player "opp") [((RID 23), (RID 21), m)]
 
+initWorld :: World -> World
+initWorld w = let srs = last $ [srs | SuperRegions srs <- tbd w]
+                  rs = last $ [rs | Regions rs <- tbd w]
+                  ns = last $ [ns | Neighbors ns <- tbd w]
+                  srs' = [(sr, rw, [r | (r, sr') <- rs, sr'==sr]) | (sr, rw) <- srs]
+                  rs' = [(r, sr, Neutral, 0) | (r, sr) <- rs] 
+                  nodes = zip [1..] (map fst rs)
+                  ridToNode r = head [n | (n, r') <- nodes, r'==r] -- scales really bad
+                  edges = [(ridToNode l, ridToNode r, 1) | (l, rs) <- ns, r <- rs]
+                  w' = w { world = G.mkGraph nodes edges
+                         , regions = M.fromList . zip (map fst rs) $ rs'
+                         , superRegions = M.fromList . zip (map fst srs) $ srs'
+                         , tbd = []
+                         }
+              in w' 
 updateWorld :: World -> Message -> World
-updateWorld w msg = w
+updateWorld w msg = case msg of
+                        YourBot p -> w { me = p }
+                        OpponentBot p -> w { opponent = p }
+                        PickStartingRegions _ _ -> let w' = initWorld w in w' { tbd = msg:tbd w' }
+                        _ -> w { tbd = msg:tbd w }
 
 
 step :: (mem -> World -> mem) -> (mem, World, Bool) -> Message -> (mem, World, Bool) 
 step logic (m,w,_) msg = let w' = updateWorld w msg
                              o = requestsOutput msg
-                             m' = logic m w 
+                             m' = logic m w' 
                          in (m',w',o) where requestsOutput msg = case msg of
                                                             PickStartingRegions _ _ -> True
                                                             PlaceArmiesRequest _ -> True
