@@ -57,7 +57,7 @@ data Brain mem = Brain { emptyMemory :: mem
 
 stupidBrain :: Brain Int 
 stupidBrain = Brain 0 logic chosenMove
-              where logic m w = G.spLength (head . G.nodes . world $ w) (last . G.nodes . world $ w) (world w)
+              where logic m w = fromJust . fmap (\(_,_,_,na) -> na) . M.lookup (RID 2) . regions $ w 
                     chosenMove m = AttackTransfer (Player "opp") [((RID 23), (RID 21), m)]
 
 initWorld :: World -> World
@@ -75,11 +75,19 @@ initWorld w = let srs = last $ [srs | SuperRegions srs <- tbd w]
                          , tbd = []
                          }
               in w' 
+
+factionOfPlayer :: World -> Player -> Faction
+factionOfPlayer w p = if p == me w then Friendly p
+                      else if p == opponent w then Enemy p
+                      else Neutral
+
+
 updateWorld :: World -> Message -> World
 updateWorld w msg = case msg of
                         YourBot p -> w { me = p }
                         OpponentBot p -> w { opponent = p }
                         PickStartingRegions _ _ -> let w' = initWorld w in w' { tbd = msg:tbd w' }
+                        UpdateMap upds -> foldr (\(r,p,na) w' -> w' { regions = M.adjust (\(_,s,_,_) -> (r,s,factionOfPlayer w' p,na)) r . regions $ w' }) w upds
                         _ -> w { tbd = msg:tbd w }
 
 
